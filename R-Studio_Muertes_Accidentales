@@ -1,0 +1,151 @@
+rm(list=ls()) 
+
+library(forecast)
+library(datasets)
+library(stats)
+library(ggplot2)
+library(tseries)
+library(lmtest)
+library(TSA)
+
+
+"1º día de confinamiento: 15 de Marzo 2020"
+"Final confinamiento: 21 de Junio 2020"
+
+"Durante el confinamiento solo podía cogerse transportes cuando:
+  -Asistencia a centros, servicios y establecimientos sanitarios
+  -Desplazamiento al lugar de trabajo para efectuar su prestación laboral, 
+  profesional o empresarial permitida.
+  -Por causa de fuerza mayor o situación de necesidad 
+  (como emergencias en el domicilio).
+  -Retorno al lugar de residencia habitual.
+  -Desplazamiento a entidades financieras y de seguros.
+"
+
+
+mat5 <- read_excel("mat5.xlsx")
+
+library(xts)
+tdatos <- as.ts(mat5)
+tdatos
+mean(tdatos[1:79])
+dim(tdatos)
+"120 datos "
+
+#############################GRAFICA SERIE TEMPORAL############################
+
+
+plot(tdatos, xaxt = "n",ylab="Muertes por accidentes ",xlab="Meses")
+"El mes 84 corresponde con Marzo"
+mtext("15/03/20", side=3, at=82,col="red")
+mtext("21/06/20", side=3, at=90,col="blue")
+axis(1,at=time(tdatos),
+     labels=format(seq(as.Date("2013/05/01"), by="month", length=120),"%b"))
+abline(v=83+15/31,col="red")
+abline(v=86+21/30,col="blue")
+
+
+########################## ACF y PACF ##########################################
+
+"Estos son contrastes de hipótesis que me ayudan a decidir si la serie es 
+estacionaria o no.Estacionaria significa que la media y la varianza
+en todas las variables aleatorias temporales son constantes. 
+La serie en principio no lo es, por lo tanto para se aplica una diferenciación
+de los datos para así eliminar tendencias polinómicas de la media y la varianza"
+par(mfrow=c(1,2),oma=c(0,0,0,0))
+acf(tdatos[1:83],lag.max=36,type="correlation",main="Autocorrelación")
+acf(tdatos[1:83], lag.max=36,type="partial",main="Autocorrelación parcial"
+    ,ylab="PACF")
+
+
+"Vamos a diferenciar la serie solo con la parte estacional, pues esta es la que 
+me provoca la no estacionariedad. Al aplicar la diferenciación, asumimos ya 
+estacionariedad ya que pasan los test"
+# Serie diferenciada en la parte estacional
+pre_d12 <- diff(tdatos[1:83], lag =  12)
+par(mfrow=c(1,2),oma=c(0,0,0,0))
+acf(pre_d12,lag.max=36,type="correlation",main="Autocorrelación")
+acf(pre_d12, lag.max=36,type="partial",main="Autocorrelación parcial"
+    ,ylab="PACF")
+
+"¿Por qué queremos que la serie sea estacionaria?
+Para la metodología de Box-Jenkins, las series deberán de ser estacionarias
+para poderlas aproximar por un proceso ARIMA"
+
+################### MODELAJE PARTE ESTACIONAL ##################################
+
+
+"Primero, se modela pa parte estacional, que es aquella que provoca patrones 
+temporales en la serie (Incremento de muertes en los meses de verano, 
+Incremento de muertes en navidad...)"
+
+"Cuando modelamos la serie por un proceso ARIMA, debemos comprobar que los
+residuos sean estacionarios y sigan una distribución normal (0,sigma^2)"
+c1 <- Arima(tdatos[1:83],order=c(0,0,0),seasonal=list(order=c(1,1,0),period=12))
+
+print(c1)
+
+coeftest(c1)
+"Test de normalidad"
+checkresiduals(c1)
+var(c1$residuals)
+"Test de estacioanriedad"
+ks.test(c1$residuals,'pnorm',mean(c1$residuals),sd(c1$residuals))
+adf.test(residuals(c1))
+
+"VÁLIDO"
+
+
+############################## INTERVENCION ###################################
+
+
+ 
+T<-length(tdatos)
+St1<-c(rep(0,82),rep(1,(T-82)))
+
+m.tf=arimax(tdatos,order=c(0,0,0),
+            seasonal=list(order=c(1,1,0), period=12), 
+            xtransf=data.frame(Mar20=1*(seq(tdatos)==84),
+                               Mar20=1*(seq(tdatos)==84)),
+            transfer=list(c(0,0),c(1,0)),
+            method='ML')
+
+summary(m.tf)
+coeftest(m.tf)
+"Pasa para el coeficiente autoregresivo"
+par(mfrow=c(1,2),oma=c(0,0,0,0))
+acf(m.tf$residuals,lag.max=36,type="correlation",main="Autocorrelación")
+acf(m.tf$residuals, lag.max=36,type="partial",main="Autocorrelación parcial"
+    ,ylab="PACF")
+checkresiduals(m.tf)
+qqnorm(m.tf$residuals)
+qqline(m.tf$residuals)
+ks.test(m.tf$residuals,'pnorm',mean(m.tf$residuals),sd(m.tf$residuals))
+"PASA TODOS LOS TEST"
+
+
+
+#######GRAFICAS#######
+"Aquí muestro las graficas, las dos de arriba"
+"gráfica sin dif en parte regular"
+plot(tdatos, col='red', main="modelo 1 (escalón)")
+
+lines(fitted(m.tf), col='blue')
+
+
+#Ecuación
+
+"(1+0.4852L^12)(1-L^12)Z_{t}=0.258505/(1-0.992426L)S_{t}^{(82)}+WN_{t}"
+Box.test(m.tf$residuals, lag = 16, type = "Ljung-Box", fitdf = 4)
+
+#Comparación de modelos
+mmt <- auto.arima(tdatos)
+plot(tdatos, col='red')
+lines(fitted(mmt), col='blue')
+summary(mmt)
+summary(m.tf)
+names(mmt)
+checkresiduals(mmt)
+checkresiduals(m.tf,fitdf = 4)
+autoplot(mmt)
+ks.test(mmt$residuals,'pnorm',mean(mmt$residuals),sd(mmt$residuals))
